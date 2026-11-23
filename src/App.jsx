@@ -415,7 +415,7 @@ function NamedForm({fieldLabel,onSubmit,onCancel,saving}){const [name,setName]=u
 function LocationForm({onSubmit,onCancel,saving}){const [name,setName]=useState('');const [sizeNote,setSizeNote]=useState('');return <form onSubmit={e=>{e.preventDefault();onSubmit({name,sizeNote:sizeNote||null});}} className="space-y-4"><Field label="Farm / site name"><input className="field" required maxLength="200" value={name} onChange={e=>setName(e.target.value)}/></Field><Field label="Size / notes"><input className="field" maxLength="500" placeholder="Area, district, or details" value={sizeNote} onChange={e=>setSizeNote(e.target.value)}/></Field><ModalActions onCancel={onCancel} saving={saving} label="Save location"/></form>;}
 
 function PersonForm({ initial, departments, onSubmit, onCancel, saving }) {
-  const [form,setForm]=useState({fullName:initial?.full_name||'',jobTitle:initial?.job_title||'',email:initial?.email||'',phone:initial?.phone||'',departmentId:initial?.department_id||'',startDate:initial?.start_date||dateToday(),status:initial?.status||'Active',notes:initial?.notes||''});
+  const [form,setForm]=useState({fullName:initial?.full_name||'',jobTitle:initial?.job_title||'',email:initial?.email||'',phone:initial?.phone||'',departmentId:initial?.department_id||'',startDate:initial?(initial.start_date||''):dateToday(),status:initial?.status||'Active',notes:initial?.notes||''});
   const set=(key,value)=>setForm(current=>({...current,[key]:value}));
   return <form onSubmit={e=>{e.preventDefault();onSubmit({...form,departmentId:form.departmentId||null,startDate:form.startDate||null});}} className="space-y-4">
     <Field label="Full name"><input className="field" required maxLength="200" autoComplete="name" placeholder="Employee name" value={form.fullName} onChange={e=>set('fullName',e.target.value)} /></Field>
@@ -428,7 +428,7 @@ function PersonForm({ initial, departments, onSubmit, onCancel, saving }) {
 }
 
 function AssetForm({ initial, people, locations, onSubmit, onCancel, saving }) {
-  const [form,setForm]=useState({name:initial?.name||'',category:initial?.category||'Equipment',assetTag:initial?.asset_tag||'',acquiredOn:initial?.acquired_on||dateToday(),costUgx:initial?.cost_ugx??'',status:initial?.status||'In use',locationId:initial?.location_id||'',assignedTo:initial?.assigned_to||'',notes:initial?.notes||''});
+  const [form,setForm]=useState({name:initial?.name||'',category:initial?.category||'Equipment',assetTag:initial?.asset_tag||'',acquiredOn:initial?(initial.acquired_on||''):dateToday(),costUgx:initial?.cost_ugx??'',status:initial?.status||'In use',locationId:initial?.location_id||'',assignedTo:initial?.assigned_to||'',notes:initial?.notes||''});
   const set=(key,value)=>setForm(current=>({...current,[key]:value}));
   return <form onSubmit={e=>{e.preventDefault();onSubmit({...form,costUgx:Number(form.costUgx||0),acquiredOn:form.acquiredOn||null,locationId:form.locationId||null,assignedTo:form.assignedTo||null});}} className="space-y-4">
     <Field label="Asset name"><input className="field" required maxLength="200" placeholder="e.g. Water pump" value={form.name} onChange={e=>set('name',e.target.value)} /></Field>
