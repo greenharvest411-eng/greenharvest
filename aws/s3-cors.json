@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["POST", "GET", "HEAD"],
+    "AllowedOrigins": ["http://localhost:5173", "https://REPLACE-WITH-YOUR-APP-DOMAIN"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]

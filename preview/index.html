@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f8f4">
+  <title>Green Harvest | Sign in preview</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background-color:#f6f8f4;background-image:radial-gradient(#dce8d9 .7px,transparent .7px);background-size:14px 14px;color:#17291e;font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.card{display:grid;width:min(900px,100%);min-height:540px;grid-template-columns:1.1fr 1fr;overflow:hidden;border:1px solid #e4ebe1;border-radius:26px;background:#fff;box-shadow:0 22px 70px -34px #253e2b40}.brand{position:relative;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;padding:40px;background:#173f2b;color:white}.brand:before,.brand:after{position:absolute;right:-96px;top:-96px;width:290px;height:290px;border:1px solid #ffffff1a;border-radius:50%;content:""}.brand:after{right:-42px;top:-42px;width:180px;height:180px}.logo{position:relative;display:flex;align-items:center;gap:12px}.mark{display:grid;width:44px;height:44px;place-items:center;border-radius:14px;background:#ffffff18;font-size:24px;color:#c9e2b9}.company{font-size:15px;font-weight:750}.company small{display:block;color:#ffffff88;font-size:10px;font-weight:400}.hero{position:relative}.plant{display:grid;width:48px;height:48px;place-items:center;margin-bottom:20px;border-radius:16px;background:#b6d9a426;color:#c9e2b9;font-size:24px}.hero h1{margin:0;font-size:32px;line-height:1.17;letter-spacing:-1.2px}.hero p{max-width:320px;margin:16px 0 0;color:#ffffffa8;font-size:13px;line-height:1.8}.secure{position:relative;display:flex;align-items:center;gap:8px;color:#ffffff80;font-size:10px}.form{align-self:center;padding:42px}.eyebrow{color:#6a9870;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase}.form h2{margin:8px 0 0;font-size:25px;letter-spacing:-1px}.intro{margin:7px 0 27px;color:#879287;font-size:12px}.label{display:block;margin:17px 0 6px;color:#536357;font-size:11px;font-weight:600}.input{width:100%;height:43px;padding:0 12px;border:1px solid #dce4dc;border-radius:10px;background:white;color:#17291e;font:inherit;outline:none}.input:focus{border-color:#418b56;box-shadow:0 0 0 3px #418b561a}.submit{display:flex;width:100%;height:44px;align-items:center;justify-content:center;gap:8px;margin-top:26px;border:0;border-radius:10px;background:#287540;color:white;font:600 12px inherit}.foot{margin-top:23px;text-align:center;color:#99a299;font-size:10px}.preview-note{position:fixed;right:14px;bottom:14px;padding:8px 11px;border:1px solid #e2e8df;border-radius:9px;background:#ffffffdc;color:#718073;font-size:10px;backdrop-filter:blur(8px)}
+    @media(max-width:680px){body{padding:16px}.card{display:block;min-height:0;border-radius:20px}.brand{display:none}.form{padding:32px 25px}.form:before{display:grid;width:44px;height:44px;place-items:center;margin-bottom:20px;border-radius:14px;background:#e9f3e7;color:#39834d;content:"♧";font-size:23px}.preview-note{left:14px;right:auto}}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <section class="brand"><div class="logo"><span class="mark">♧</span><div class="company">Green Harvest<small>Uganda Ltd</small></div></div><div class="hero"><div class="plant">♧</div><h1>Grow with clarity.<br>Manage with confidence.</h1><p>One place to keep your projects, finances, and farm operations moving forward.</p></div><div class="secure">◈ &nbsp;Private company workspace</div></section>
+    <form class="form" onsubmit="event.preventDefault();document.getElementById('message').hidden=false">
+      <div class="eyebrow">Welcome back</div><h2>Sign in to your workspace</h2><p class="intro">Use your company account to continue.</p>
+      <div id="message" hidden style="margin:0 0 16px;padding:10px;border-radius:8px;background:#fff4f0;color:#aa513c;font-size:11px">This preview is not connected to the API yet.</div>
+      <label class="label" for="email">Email address</label><input class="input" id="email" type="email" placeholder="you@greenharvest.ug" autocomplete="username">
+      <label class="label" for="password">Password</label><input class="input" id="password" type="password" placeholder="Enter your password" autocomplete="current-password">
+      <button class="submit" type="submit">Sign in &nbsp; →</button><div class="foot">Access is managed by your company administrator.</div>
+    </form>
+  </main>
+  <aside class="preview-note">Visual preview · not connected to Supabase</aside>
+</body>
+</html>

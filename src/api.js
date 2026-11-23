@@ -1,0 +1,47 @@
+async function request(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    credentials: 'include',
+    headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers },
+  });
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  return data;
+}
+
+export const api = {
+  me: () => request('/api/auth/me'),
+  login: (email, password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: () => request('/api/auth/logout', { method: 'POST' }),
+  organisation: () => request('/api/organisation'),
+  accounts: () => request('/api/accounts'),
+  createAccount: (value) => request('/api/accounts', { method: 'POST', body: JSON.stringify(value) }),
+  rates: () => request('/api/exchange-rates'),
+  createRate: (value) => request('/api/exchange-rates', { method: 'POST', body: JSON.stringify(value) }),
+  transactions: () => request('/api/transactions'),
+  createTransaction: (value) => request('/api/transactions', { method: 'POST', body: JSON.stringify(value) }),
+  contributions: () => request('/api/contributions'),
+  createContribution: (value) => request('/api/contributions', { method: 'POST', body: JSON.stringify(value) }),
+  purchases: () => request('/api/purchases'),
+  createPurchase: (value) => request('/api/purchases', { method: 'POST', body: JSON.stringify(value) }),
+  crops: () => request('/api/crop-cycles'),
+  createCrop: (value) => request('/api/crop-cycles', { method: 'POST', body: JSON.stringify(value) }),
+  decisions: () => request('/api/decisions'),
+  createDecision: (value) => request('/api/decisions', { method: 'POST', body: JSON.stringify(value) }),
+  structure: () => request('/api/structure'),
+  createDepartment: (value) => request('/api/departments', { method: 'POST', body: JSON.stringify(value) }),
+  createLocation: (value) => request('/api/locations', { method: 'POST', body: JSON.stringify(value) }),
+  audit: () => request('/api/audit'),
+  projects: () => request('/api/projects'),
+  createProject: (value) => request('/api/projects', { method: 'POST', body: JSON.stringify(value) }),
+  async uploadImage(file) {
+    const signed = await request('/api/uploads/presign', { method: 'POST', body: JSON.stringify({ contentType: file.type, size: file.size, filename: file.name }) });
+    const form = new FormData();
+    Object.entries(signed.fields).forEach(([key, value]) => form.append(key, value));
+    form.append('file', file);
+    const response = await fetch(signed.uploadUrl, { method: signed.method, body: form });
+    if (!response.ok) throw new Error('Could not upload picture to the company bucket');
+    return signed.key;
+  },
+};
