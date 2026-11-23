@@ -383,6 +383,65 @@ async function route(req, res) {
       return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
     });
   }
+  if (req.method === 'GET' && url.pathname === '/api/people') {
+    requirePermission(user,'people.view');
+    const result=await pool.query(`select p.id,p.full_name,p.job_title,p.email,p.phone,p.start_date,p.status,p.notes,p.department_id,d.name as department_name
+      from employees p left join departments d on d.id=p.department_id and d.organisation_id=p.organisation_id
+      where p.organisation_id=$1 order by p.status='Inactive',p.full_name`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/people') {
+    requirePermission(user,'people.create');
+    const data=await body(req); const name=requiredString(data.fullName,'Full name');
+    const title=data.jobTitle?requiredString(data.jobTitle,'Job title',150):null;
+    const email=data.email?requiredString(data.email,'Email',320).toLowerCase():null;
+    if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Object.assign(new Error('Enter a valid email address'),{status:400});
+    const phone=data.phone?requiredString(data.phone,'Phone',50):null;
+    const startDate=data.startDate?validDate(data.startDate,'Start date'):null;
+    const status=data.status||'Active';
+    if(!['Active','On leave','Inactive'].includes(status)) throw Object.assign(new Error('Choose a valid employment status'),{status:400});
+    const departmentId=data.departmentId||null;
+    const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
+    return withAudit(req,res,{action:'create',type:'employee'},async client=>{
+      const result=await client.query(`insert into employees (organisation_id,full_name,job_title,email,phone,start_date,status,department_id,notes,created_by)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id,full_name,job_title,email,phone,start_date,status,department_id,notes`,
+        [user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes,user.id]);
+      const row=result.rows[0];
+      if(row.department_id){const department=await client.query('select name from departments where id=$1 and organisation_id=$2',[row.department_id,user.organisation_id]);row.department_name=department.rows[0]?.name||null;}
+      return {id:row.id,response:row,auditValue:row};
+    });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/assets') {
+    requirePermission(user,'asset.view');
+    const result=await pool.query(`select a.id,a.name,a.category,a.asset_tag,a.acquired_on,a.cost_ugx,a.status,a.notes,a.location_id,l.name as location_name,
+      a.assigned_to,e.full_name as assigned_to_name from assets a
+      left join locations l on l.id=a.location_id and l.organisation_id=a.organisation_id
+      left join employees e on e.id=a.assigned_to and e.organisation_id=a.organisation_id
+      where a.organisation_id=$1 order by a.status='Retired',a.name`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/assets') {
+    requirePermission(user,'asset.create');
+    const data=await body(req); const name=requiredString(data.name,'Asset name');
+    const category=data.category?requiredString(data.category,'Category',100):'Equipment';
+    const assetTag=data.assetTag?requiredString(data.assetTag,'Asset tag',100):null;
+    const acquiredOn=data.acquiredOn?validDate(data.acquiredOn,'Acquisition date'):null;
+    const cost=Number(data.costUgx||0);
+    if(!Number.isSafeInteger(cost)||cost<0) throw Object.assign(new Error('Cost must be a non-negative whole UGX amount'),{status:400});
+    const status=data.status||'In use';
+    if(!['In use','Maintenance','Retired'].includes(status)) throw Object.assign(new Error('Choose a valid asset status'),{status:400});
+    const locationId=data.locationId||null; const assignedTo=data.assignedTo||null;
+    const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
+    return withAudit(req,res,{action:'create',type:'asset'},async client=>{
+      const result=await client.query(`insert into assets (organisation_id,name,category,asset_tag,acquired_on,cost_ugx,status,location_id,assigned_to,notes,created_by)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id,name,category,asset_tag,acquired_on,cost_ugx,status,location_id,assigned_to,notes`,
+        [user.organisation_id,name,category,assetTag,acquiredOn,cost,status,locationId,assignedTo,notes,user.id]);
+      const row=result.rows[0];
+      if(row.location_id){const location=await client.query('select name from locations where id=$1 and organisation_id=$2',[row.location_id,user.organisation_id]);row.location_name=location.rows[0]?.name||null;}
+      if(row.assigned_to){const person=await client.query('select full_name from employees where id=$1 and organisation_id=$2',[row.assigned_to,user.organisation_id]);row.assigned_to_name=person.rows[0]?.full_name||null;}
+      return {id:row.id,response:row,auditValue:row};
+    });
+  }
   if (req.method === 'GET' && url.pathname === '/api/audit') {
     requirePermission(user,'audit.view');
     const result=await pool.query(`select a.id,a.at,a.action,a.record_type,a.record_id,a.old_value,a.new_value,a.ip,a.user_agent,u.full_name as actor
