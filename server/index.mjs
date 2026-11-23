@@ -97,7 +97,7 @@ async function withAudit(req, res, info, operation) {
   try {
     await client.query('begin');
     const result = await operation(client);
-    await audit(client, req.user.id, req.user.organisation_id, info.action, info.type, result.id, null, result.auditValue, req);
+    await audit(client, req.user.id, req.user.organisation_id, info.action, info.type, result.id, result.oldValue ?? null, result.auditValue, req);
     await client.query('commit');
     json(res, info.status || 201, result.response);
   } catch (error) {
@@ -411,6 +411,29 @@ async function route(req, res) {
       return {id:row.id,response:row,auditValue:row};
     });
   }
+  const personIdMatch = url.pathname.match(/^\/api\/people\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
+  if (req.method === 'PATCH' && personIdMatch) {
+    requirePermission(user,'people.update');
+    const data=await body(req); const name=requiredString(data.fullName,'Full name');
+    const title=data.jobTitle?requiredString(data.jobTitle,'Job title',150):null;
+    const email=data.email?requiredString(data.email,'Email',320).toLowerCase():null;
+    if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Object.assign(new Error('Enter a valid email address'),{status:400});
+    const phone=data.phone?requiredString(data.phone,'Phone',50):null;
+    const startDate=data.startDate?validDate(data.startDate,'Start date'):null;
+    const status=data.status||'Active';
+    if(!['Active','On leave','Inactive'].includes(status)) throw Object.assign(new Error('Choose a valid employment status'),{status:400});
+    const departmentId=data.departmentId||null; const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
+    return withAudit(req,res,{action:'update',type:'employee'},async client=>{
+      const existing=await client.query('select * from employees where id=$1 and organisation_id=$2 for update',[personIdMatch[1],user.organisation_id]);
+      if(!existing.rowCount) throw Object.assign(new Error('Person not found'),{status:404});
+      const result=await client.query(`update employees set full_name=$3,job_title=$4,email=$5,phone=$6,start_date=$7,status=$8,department_id=$9,notes=$10
+        where id=$1 and organisation_id=$2 returning id,full_name,job_title,email,phone,start_date,status,department_id,notes`,
+        [personIdMatch[1],user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes]);
+      const row=result.rows[0];
+      if(row.department_id){const department=await client.query('select name from departments where id=$1 and organisation_id=$2',[row.department_id,user.organisation_id]);row.department_name=department.rows[0]?.name||null;}
+      return {id:row.id,response:row,oldValue:existing.rows[0],auditValue:row};
+    });
+  }
   if (req.method === 'GET' && url.pathname === '/api/assets') {
     requirePermission(user,'asset.view');
     const result=await pool.query(`select a.id,a.name,a.category,a.asset_tag,a.acquired_on,a.cost_ugx,a.status,a.notes,a.location_id,l.name as location_name,
@@ -440,6 +463,31 @@ async function route(req, res) {
       if(row.location_id){const location=await client.query('select name from locations where id=$1 and organisation_id=$2',[row.location_id,user.organisation_id]);row.location_name=location.rows[0]?.name||null;}
       if(row.assigned_to){const person=await client.query('select full_name from employees where id=$1 and organisation_id=$2',[row.assigned_to,user.organisation_id]);row.assigned_to_name=person.rows[0]?.full_name||null;}
       return {id:row.id,response:row,auditValue:row};
+    });
+  }
+  const assetIdMatch = url.pathname.match(/^\/api\/assets\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
+  if (req.method === 'PATCH' && assetIdMatch) {
+    requirePermission(user,'asset.update');
+    const data=await body(req); const name=requiredString(data.name,'Asset name');
+    const category=data.category?requiredString(data.category,'Category',100):'Equipment';
+    const assetTag=data.assetTag?requiredString(data.assetTag,'Asset tag',100):null;
+    const acquiredOn=data.acquiredOn?validDate(data.acquiredOn,'Acquisition date'):null;
+    const cost=Number(data.costUgx||0);
+    if(!Number.isSafeInteger(cost)||cost<0) throw Object.assign(new Error('Cost must be a non-negative whole UGX amount'),{status:400});
+    const status=data.status||'In use';
+    if(!['In use','Maintenance','Retired'].includes(status)) throw Object.assign(new Error('Choose a valid asset status'),{status:400});
+    const locationId=data.locationId||null; const assignedTo=data.assignedTo||null;
+    const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
+    return withAudit(req,res,{action:'update',type:'asset'},async client=>{
+      const existing=await client.query('select * from assets where id=$1 and organisation_id=$2 for update',[assetIdMatch[1],user.organisation_id]);
+      if(!existing.rowCount) throw Object.assign(new Error('Asset not found'),{status:404});
+      const result=await client.query(`update assets set name=$3,category=$4,asset_tag=$5,acquired_on=$6,cost_ugx=$7,status=$8,location_id=$9,assigned_to=$10,notes=$11
+        where id=$1 and organisation_id=$2 returning id,name,category,asset_tag,acquired_on,cost_ugx,status,location_id,assigned_to,notes`,
+        [assetIdMatch[1],user.organisation_id,name,category,assetTag,acquiredOn,cost,status,locationId,assignedTo,notes]);
+      const row=result.rows[0];
+      if(row.location_id){const location=await client.query('select name from locations where id=$1 and organisation_id=$2',[row.location_id,user.organisation_id]);row.location_name=location.rows[0]?.name||null;}
+      if(row.assigned_to){const person=await client.query('select full_name from employees where id=$1 and organisation_id=$2',[row.assigned_to,user.organisation_id]);row.assigned_to_name=person.rows[0]?.full_name||null;}
+      return {id:row.id,response:row,oldValue:existing.rows[0],auditValue:row};
     });
   }
   if (req.method === 'GET' && url.pathname === '/api/audit') {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity, ArrowDownLeft, ArrowRight, ArrowUpRight, BadgeCheck, Banknote, Building2,
   Check, ChevronDown, ChevronRight, CircleHelp, CloudUpload, Coins, CreditCard, FileText,
-  FolderKanban, Globe2, ImagePlus, Leaf, LoaderCircle, LogOut, Menu, MoreHorizontal, Package, Plus,
+  FolderKanban, Globe2, ImagePlus, Leaf, LoaderCircle, LogOut, Menu, MoreHorizontal, Package, Pencil, Plus,
   Settings2, ShieldCheck, Sprout, Tractor, TrendingUp, Users, Wallet, X,
 } from 'lucide-react';
 import { api } from './api.js';
@@ -44,7 +44,11 @@ export default function App() {
   const [error, setError] = useState('');
   const [data, setData] = useState({ accounts: [], rates: [], transactions: [], projects: [], contributions: [], purchases: [], crops: [], decisions: [], structure: { departments: [], locations: [] }, people: [], assets: [], audit: [] });
   const [modal, setModal] = useState('');
+  const [editingRecord, setEditingRecord] = useState(null);
   const [saving, setSaving] = useState(false);
+  const openModal = kind => { setEditingRecord(null); setModal(kind); };
+  const openEdit = (kind, record) => { setEditingRecord({ kind, record }); setModal(kind); };
+  const closeModal = () => { setModal(''); setEditingRecord(null); };
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -86,9 +90,15 @@ export default function App() {
       if (kind === 'decision') await api.createDecision(value);
       if (kind === 'department') await api.createDepartment(value);
       if (kind === 'location') await api.createLocation(value);
-      if (kind === 'person') await api.createPerson(value);
-      if (kind === 'asset') await api.createAsset(value);
-      setModal(''); await refresh();
+      if (kind === 'person') {
+        if (editingRecord?.kind === 'person') await api.updatePerson(editingRecord.record.id, value);
+        else await api.createPerson(value);
+      }
+      if (kind === 'asset') {
+        if (editingRecord?.kind === 'asset') await api.updateAsset(editingRecord.record.id, value);
+        else await api.createAsset(value);
+      }
+      closeModal(); await refresh();
     } catch (err) { setError(err.message); }
     finally { setSaving(false); }
   }
@@ -150,10 +160,10 @@ export default function App() {
           {active === 'purchases' && <Purchases data={data} onAdd={() => setModal('purchase')} />}
           {active === 'decisions' && <Decisions data={data} onAdd={() => setModal('decision')} />}
           {active === 'control' && <AuditPage data={data} />}
-          {active === 'people' && <PeopleAssets data={data} onAdd={setModal} />}
+          {active === 'people' && <PeopleAssets data={data} onAdd={openModal} onEdit={openEdit} />}
         </main>
       </div>
-      {modal && <Modal title={modalTitle(modal)} onClose={() => setModal('')}>
+      {modal && <Modal title={modalTitle(modal, editingRecord)} onClose={closeModal}>
         {modal === 'transaction' && <TransactionForm accounts={data.accounts} rates={data.rates} projects={data.projects} onSubmit={value => submit('transaction', value)} onCancel={() => setModal('')} saving={saving} />}
         {modal === 'contribution' && <ContributionForm accounts={data.accounts} rates={data.rates} onSubmit={value => submit('contribution', value)} onCancel={() => setModal('')} saving={saving} />}
         {modal === 'account' && <AccountForm onSubmit={value => submit('account', value)} onCancel={() => setModal('')} saving={saving} />}
@@ -164,8 +174,8 @@ export default function App() {
         {modal === 'decision' && <DecisionForm onSubmit={value => submit('decision', value)} onCancel={() => setModal('')} saving={saving} />}
         {modal === 'department' && <NamedForm title="Department name" fieldLabel="Name" onSubmit={value => submit('department', value)} onCancel={() => setModal('')} saving={saving} />}
         {modal === 'location' && <LocationForm onSubmit={value => submit('location', value)} onCancel={() => setModal('')} saving={saving} />}
-        {modal === 'person' && <PersonForm departments={data.structure.departments} onSubmit={value => submit('person', value)} onCancel={() => setModal('')} saving={saving} />}
-        {modal === 'asset' && <AssetForm people={data.people} locations={data.structure.locations} onSubmit={value => submit('asset', value)} onCancel={() => setModal('')} saving={saving} />}
+        {modal === 'person' && <PersonForm key={editingRecord?.record.id || 'new'} initial={editingRecord?.record} departments={data.structure.departments} onSubmit={value => submit('person', value)} onCancel={closeModal} saving={saving} />}
+        {modal === 'asset' && <AssetForm key={editingRecord?.record.id || 'new'} initial={editingRecord?.record} people={data.people} locations={data.structure.locations} onSubmit={value => submit('asset', value)} onCancel={closeModal} saving={saving} />}
       </Modal>}
     </div>
   );
@@ -305,7 +315,7 @@ function ComingSoon({ active }) {
   return <div className="flex min-h-[65vh] items-center justify-center"><div className="max-w-[440px] text-center"><div className="soft-grid mx-auto flex h-20 w-20 items-center justify-center rounded-[24px] border border-[#e2eadf] bg-[#f4f8f1] text-[#648563]"><Icon size={30} strokeWidth={1.5} /></div><div className="mt-6 text-[9px] font-bold tracking-[.16em] text-[#6d9472]">{item.eyebrow}</div><h1 className="mt-2 text-[25px] font-semibold tracking-[-.04em]">{item.title}</h1><p className="mt-2 text-[11px] leading-5 text-[#879287]">{item.desc}</p><span className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-[#e8ece5] bg-white px-3 py-1.5 text-[9px] font-semibold text-[#879187]"><Activity size={12} /> Planned for a later build phase</span></div></div>;
 }
 
-function PeopleAssets({ data, onAdd }) {
+function PeopleAssets({ data, onAdd, onEdit }) {
   const activePeople = data.people.filter(person => person.status === 'Active').length;
   const workingAssets = data.assets.filter(asset => asset.status === 'In use').length;
   return <>
@@ -317,11 +327,11 @@ function PeopleAssets({ data, onAdd }) {
     <div className="grid min-w-0 gap-5 xl:grid-cols-2">
       <section className="min-w-0 rounded-[14px] border border-[#e8ede6] bg-white p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3"><div><h2 className="text-[13px] font-semibold">People</h2><p className="mt-1 text-[10px] text-[#929c92]">Staff contact and department details</p></div><Button variant="secondary" onClick={() => onAdd('person')}><Plus size={13} /> Add</Button></div>
-        {data.people.length ? <div className="mt-4 divide-y divide-[#f0f2ee]">{data.people.map(person => <article key={person.id} className="flex min-w-0 items-start gap-3 py-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#edf5ec] text-[#54855b]"><UserRoundIcon /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="break-words text-[11px] font-semibold">{person.full_name}</h3><StatusPill status={person.status} /></div><p className="mt-1 break-words text-[10px] text-[#718073]">{person.job_title || 'Role not set'}{person.department_name ? ` · ${person.department_name}` : ''}</p><p className="mt-1 break-all text-[9px] text-[#929c92]">{[person.email, person.phone].filter(Boolean).join(' · ') || 'No contact details'}{person.start_date ? ` · Since ${person.start_date}` : ''}</p></div></article>)}</div> : <EmptyPanel icon={Users} title="No people added" description="Add staff members and keep their role and contact information handy." button="Add a person" onClick={() => onAdd('person')} />}
+        {data.people.length ? <div className="mt-4 divide-y divide-[#f0f2ee]">{data.people.map(person => <article key={person.id} className="flex min-w-0 items-start gap-3 py-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#edf5ec] text-[#54855b]"><UserRoundIcon /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="break-words text-[11px] font-semibold">{person.full_name}</h3><StatusPill status={person.status} /></div><p className="mt-1 break-words text-[10px] text-[#718073]">{person.job_title || 'Role not set'}{person.department_name ? ` · ${person.department_name}` : ''}</p><p className="mt-1 break-all text-[9px] text-[#929c92]">{[person.email, person.phone].filter(Boolean).join(' · ') || 'No contact details'}{person.start_date ? ` · Since ${person.start_date}` : ''}</p></div><Button variant="plain" className="shrink-0 px-2" onClick={() => onEdit('person', person)} aria-label={`Edit ${person.full_name}`}><Pencil size={14} /></Button></article>)}</div> : <EmptyPanel icon={Users} title="No people added" description="Add staff members and keep their role and contact information handy." button="Add a person" onClick={() => onAdd('person')} />}
       </section>
       <section className="min-w-0 rounded-[14px] border border-[#e8ede6] bg-white p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3"><div><h2 className="text-[13px] font-semibold">Asset register</h2><p className="mt-1 text-[10px] text-[#929c92]">Equipment, location, and assignment</p></div><Button variant="secondary" onClick={() => onAdd('asset')}><Plus size={13} /> Add</Button></div>
-        {data.assets.length ? <div className="mt-4 divide-y divide-[#f0f2ee]">{data.assets.map(asset => <article key={asset.id} className="flex min-w-0 items-start gap-3 py-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#eef1f8] text-[#6779aa]"><Package size={16} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="break-words text-[11px] font-semibold">{asset.name}</h3><StatusPill status={asset.status} /></div><p className="mt-1 break-words text-[10px] text-[#718073]">{asset.category}{asset.asset_tag ? ` · ${asset.asset_tag}` : ''}</p><p className="mt-1 break-words text-[9px] text-[#929c92]">{[asset.location_name, asset.assigned_to_name ? `Assigned to ${asset.assigned_to_name}` : ''].filter(Boolean).join(' · ') || 'No location or person assigned'}{Number(asset.cost_ugx) ? ` · ${currency(asset.cost_ugx)}` : ''}</p></div></article>)}</div> : <EmptyPanel icon={Package} title="No assets recorded" description="Add equipment and track where it is and who is responsible for it." button="Add an asset" onClick={() => onAdd('asset')} />}
+        {data.assets.length ? <div className="mt-4 divide-y divide-[#f0f2ee]">{data.assets.map(asset => <article key={asset.id} className="flex min-w-0 items-start gap-3 py-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#eef1f8] text-[#6779aa]"><Package size={16} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="break-words text-[11px] font-semibold">{asset.name}</h3><StatusPill status={asset.status} /></div><p className="mt-1 break-words text-[10px] text-[#718073]">{asset.category}{asset.asset_tag ? ` · ${asset.asset_tag}` : ''}</p><p className="mt-1 break-words text-[9px] text-[#929c92]">{[asset.location_name, asset.assigned_to_name ? `Assigned to ${asset.assigned_to_name}` : ''].filter(Boolean).join(' · ') || 'No location or person assigned'}{Number(asset.cost_ugx) ? ` · ${currency(asset.cost_ugx)}` : ''}</p></div><Button variant="plain" className="shrink-0 px-2" onClick={() => onEdit('asset', asset)} aria-label={`Edit ${asset.name}`}><Pencil size={14} /></Button></article>)}</div> : <EmptyPanel icon={Package} title="No assets recorded" description="Add equipment and track where it is and who is responsible for it." button="Add an asset" onClick={() => onAdd('asset')} />}
       </section>
     </div>
   </>;
@@ -335,7 +345,7 @@ function StatusPill({ status }) {
 function EmptyPanel({ icon: Icon, title, description, button, onClick }) { return <div className="flex flex-col items-center px-4 py-9 text-center"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f1f5ef] text-[#769078]"><Icon size={18} /></span><h3 className="mt-3 text-[11px] font-semibold">{title}</h3><p className="mt-1 max-w-[300px] text-[10px] leading-5 text-[#939d93]">{description}</p>{button && <button onClick={onClick} className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-[#edf5eb] px-3 py-2 text-[10px] font-semibold text-[#39804a] hover:bg-[#e3efdf]"><Plus size={13} /> {button}</button>}</div>; }
 
 function Modal({ title, onClose, children }) { return <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#17291e]/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section className="modal-sheet w-full max-w-[520px] overflow-y-auto rounded-t-[20px] border border-[#e5ebe3] bg-white p-4 shadow-2xl sm:max-h-[92dvh] sm:rounded-[18px] sm:p-6"><div className="mb-5 flex items-center justify-between gap-3"><div className="min-w-0"><h2 className="break-words text-[15px] font-semibold">{title}</h2><p className="mt-1 text-[10px] text-[#909b91]">This entry will be saved to the company database.</p></div><button onClick={onClose} className="shrink-0 rounded-lg p-2 text-[#849085] hover:bg-[#f4f6f2]" aria-label="Close dialog"><X size={17} /></button></div>{children}</section></div>; }
-function modalTitle(kind) { return ({ transaction: 'Record a transaction', contribution: 'Record founder contribution', account: 'Add a company account', rate: 'Record an exchange rate', project: 'Create a project', purchase: 'Record purchase', crop: 'Record crop cycle', decision: 'Log investment decision', department: 'Add department', location: 'Add farm location', person: 'Add a person', asset: 'Add an asset' })[kind] || 'Add record'; }
+function modalTitle(kind, editingRecord) { if (editingRecord?.kind === kind) return kind === 'person' ? 'Edit person details' : 'Edit asset details'; return ({ transaction: 'Record a transaction', contribution: 'Record founder contribution', account: 'Add a company account', rate: 'Record an exchange rate', project: 'Create a project', purchase: 'Record purchase', crop: 'Record crop cycle', decision: 'Log investment decision', department: 'Add department', location: 'Add farm location', person: 'Add a person', asset: 'Add an asset' })[kind] || 'Add record'; }
 function Field({ label, children, hint }) { return <label className="block"><span className="mb-1.5 block text-[10px] font-medium text-[#667368]">{label}</span>{children}{hint && <span className="mt-1 block text-[9px] text-[#9aa39a]">{hint}</span>}</label>; }
 function ModalActions({ onCancel, saving, label = 'Save entry' }) { return <div className="mt-6 flex justify-end gap-2 border-t border-[#eff2ed] pt-4"><Button variant="secondary" onClick={onCancel}>Cancel</Button><Button type="submit" disabled={saving}>{saving && <LoaderCircle size={13} className="animate-spin" />}{label}</Button></div>; }
 
@@ -404,8 +414,8 @@ function DecisionForm({ onSubmit, onCancel, saving }) {
 function NamedForm({fieldLabel,onSubmit,onCancel,saving}){const [name,setName]=useState('');return <form onSubmit={e=>{e.preventDefault();onSubmit({name});}} className="space-y-4"><Field label={fieldLabel}><input className="field" required maxLength="200" value={name} onChange={e=>setName(e.target.value)}/></Field><ModalActions onCancel={onCancel} saving={saving} label="Save"/></form>;}
 function LocationForm({onSubmit,onCancel,saving}){const [name,setName]=useState('');const [sizeNote,setSizeNote]=useState('');return <form onSubmit={e=>{e.preventDefault();onSubmit({name,sizeNote:sizeNote||null});}} className="space-y-4"><Field label="Farm / site name"><input className="field" required maxLength="200" value={name} onChange={e=>setName(e.target.value)}/></Field><Field label="Size / notes"><input className="field" maxLength="500" placeholder="Area, district, or details" value={sizeNote} onChange={e=>setSizeNote(e.target.value)}/></Field><ModalActions onCancel={onCancel} saving={saving} label="Save location"/></form>;}
 
-function PersonForm({ departments, onSubmit, onCancel, saving }) {
-  const [form,setForm]=useState({fullName:'',jobTitle:'',email:'',phone:'',departmentId:'',startDate:dateToday(),status:'Active',notes:''});
+function PersonForm({ initial, departments, onSubmit, onCancel, saving }) {
+  const [form,setForm]=useState({fullName:initial?.full_name||'',jobTitle:initial?.job_title||'',email:initial?.email||'',phone:initial?.phone||'',departmentId:initial?.department_id||'',startDate:initial?.start_date||dateToday(),status:initial?.status||'Active',notes:initial?.notes||''});
   const set=(key,value)=>setForm(current=>({...current,[key]:value}));
   return <form onSubmit={e=>{e.preventDefault();onSubmit({...form,departmentId:form.departmentId||null,startDate:form.startDate||null});}} className="space-y-4">
     <Field label="Full name"><input className="field" required maxLength="200" autoComplete="name" placeholder="Employee name" value={form.fullName} onChange={e=>set('fullName',e.target.value)} /></Field>
@@ -413,12 +423,12 @@ function PersonForm({ departments, onSubmit, onCancel, saving }) {
     <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3"><Field label="Email"><input className="field" type="email" maxLength="320" autoComplete="email" value={form.email} onChange={e=>set('email',e.target.value)} /></Field><Field label="Phone"><input className="field" type="tel" maxLength="50" autoComplete="tel" value={form.phone} onChange={e=>set('phone',e.target.value)} /></Field></div>
     <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3"><Field label="Start date"><input className="field" type="date" value={form.startDate} onChange={e=>set('startDate',e.target.value)} /></Field><Field label="Status"><select className="field" value={form.status} onChange={e=>set('status',e.target.value)}><option>Active</option><option>On leave</option><option>Inactive</option></select></Field></div>
     <Field label="Notes"><textarea className="field min-h-20 resize-y" maxLength="1000" value={form.notes} onChange={e=>set('notes',e.target.value)} /></Field>
-    <ModalActions onCancel={onCancel} saving={saving} label="Save person" />
+    <ModalActions onCancel={onCancel} saving={saving} label={initial ? 'Update person' : 'Save person'} />
   </form>;
 }
 
-function AssetForm({ people, locations, onSubmit, onCancel, saving }) {
-  const [form,setForm]=useState({name:'',category:'Equipment',assetTag:'',acquiredOn:dateToday(),costUgx:'',status:'In use',locationId:'',assignedTo:'',notes:''});
+function AssetForm({ initial, people, locations, onSubmit, onCancel, saving }) {
+  const [form,setForm]=useState({name:initial?.name||'',category:initial?.category||'Equipment',assetTag:initial?.asset_tag||'',acquiredOn:initial?.acquired_on||dateToday(),costUgx:initial?.cost_ugx??'',status:initial?.status||'In use',locationId:initial?.location_id||'',assignedTo:initial?.assigned_to||'',notes:initial?.notes||''});
   const set=(key,value)=>setForm(current=>({...current,[key]:value}));
   return <form onSubmit={e=>{e.preventDefault();onSubmit({...form,costUgx:Number(form.costUgx||0),acquiredOn:form.acquiredOn||null,locationId:form.locationId||null,assignedTo:form.assignedTo||null});}} className="space-y-4">
     <Field label="Asset name"><input className="field" required maxLength="200" placeholder="e.g. Water pump" value={form.name} onChange={e=>set('name',e.target.value)} /></Field>
@@ -427,7 +437,7 @@ function AssetForm({ people, locations, onSubmit, onCancel, saving }) {
     <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3"><Field label="Location"><select className="field" value={form.locationId} onChange={e=>set('locationId',e.target.value)}><option value="">No location</option>{locations.map(location=><option key={location.id} value={location.id}>{location.name}</option>)}</select></Field><Field label="Assigned to"><select className="field" value={form.assignedTo} onChange={e=>set('assignedTo',e.target.value)}><option value="">Unassigned</option>{people.filter(person=>person.status!=='Inactive').map(person=><option key={person.id} value={person.id}>{person.full_name}</option>)}</select></Field></div>
     <Field label="Status"><select className="field" value={form.status} onChange={e=>set('status',e.target.value)}><option>In use</option><option>Maintenance</option><option>Retired</option></select></Field>
     <Field label="Notes"><textarea className="field min-h-20 resize-y" maxLength="1000" value={form.notes} onChange={e=>set('notes',e.target.value)} /></Field>
-    <ModalActions onCancel={onCancel} saving={saving} label="Save asset" />
+    <ModalActions onCancel={onCancel} saving={saving} label={initial ? 'Update asset' : 'Save asset'} />
   </form>;
 }
 
