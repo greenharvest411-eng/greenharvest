@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSa
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -49,6 +50,13 @@ function parseCookies(value = '') {
   return Object.fromEntries(value.split(';').map(x => x.trim().split(/=(.*)/s)).filter(x => x.length > 1));
 }
 async function body(req) {
+  // Vercel's Node.js runtime may parse JSON bodies before invoking a function.
+  if (req.body !== undefined) {
+    if (typeof req.body === 'string' || Buffer.isBuffer(req.body)) {
+      try { return JSON.parse(req.body.toString()); } catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
+    }
+    if (req.body && typeof req.body === 'object') return req.body;
+  }
   let raw = '';
   for await (const chunk of req) {
     raw += chunk;
@@ -400,15 +408,28 @@ async function route(req, res) {
   return json(res, 404, { error: 'Not found' });
 }
 
-const server = (await import('node:http')).createServer(async (req, res) => {
-  try { await route(req, res); }
+export async function handler(req, res) {
+  try {
+    initialization ||= initialize();
+    await initialization;
+    await route(req, res);
+  }
   catch (error) {
     if (res.headersSent) return res.destroy(error);
     const status = Number(error.status) || (error.code === '23505' ? 409 : error.code === '23503' ? 400 : 500);
     if (status >= 500) console.error(error);
     json(res, status, { error: status >= 500 ? 'Internal server error' : error.message });
   }
-});
+}
+
+let initialization;
+async function initialize() {
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
+  await pool.query('select 1');
+  await bootstrapOwner();
+}
+
+const server = (await import('node:http')).createServer(handler);
 
 async function bootstrapOwner() {
   const email = process.env.OWNER_EMAIL?.trim().toLowerCase(); const password = process.env.OWNER_PASSWORD;
@@ -434,9 +455,11 @@ async function bootstrapOwner() {
 }
 
 async function start() {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
-  await pool.query('select 1');
-  await bootstrapOwner();
+  initialization ||= initialize();
+  await initialization;
   server.listen(port, () => console.log(`Green Harvest API listening on port ${port}`));
 }
-start().catch(error => { console.error(error); process.exit(1); });
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  start().catch(error => { console.error(error); process.exit(1); });
+}
