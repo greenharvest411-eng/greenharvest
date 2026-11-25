@@ -4,16 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
+import { runtimeDatabaseUrl } from './databaseUrl.mjs';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 
 const scrypt = promisify(scryptCallback);
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // Vercel creates multiple serverless instances. Keep each instance to one
-  // session-pooler connection so parallel cold starts cannot exhaust Supabase's
-  // small session-mode pool (15 connections on the current project).
+  connectionString: runtimeDatabaseUrl(process.env.DATABASE_URL),
+  // Keep each Vercel instance to one client; Supavisor transaction mode shares
+  // these transient clients over the database connection pool.
   max: Number(process.env.PG_POOL_SIZE || 1),
   connectionTimeoutMillis: 65_000,
   idleTimeoutMillis: 30_000,
