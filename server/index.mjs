@@ -223,6 +223,15 @@ async function route(req, res) {
       where t.organisation_id=$1 and t.deleted_at is null order by t.txn_date desc,t.created_at desc limit 500`, [user.organisation_id]);
     return json(res, 200, result.rows);
   }
+  if (req.method === 'GET' && url.pathname === '/api/finance/monthly') {
+    requirePermission(user,'finance.transaction.view');
+    const result=await pool.query(`select date_trunc('month',txn_date)::date as month,
+      coalesce(sum(amount_ugx) filter(where direction='in'),0) as income_ugx,
+      coalesce(sum(amount_ugx) filter(where direction='out'),0) as expenses_ugx,
+      coalesce(sum(case when direction='in' then amount_ugx else -amount_ugx end),0) as profit_ugx
+      from transactions where organisation_id=$1 and deleted_at is null group by date_trunc('month',txn_date)::date order by month desc limit 120`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
   if (req.method === 'POST' && url.pathname === '/api/transactions') {
     requirePermission(user, 'finance.transaction.create');
     const data = await body(req); const direction = requiredString(data.direction, 'Direction');
@@ -256,9 +265,10 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     requirePermission(user, 'project.view');
-    const result = await pool.query(`select p.id,p.name,p.status,p.budget_ugx,p.forecast_revenue_ugx,p.main_risk,p.next_milestone,p.milestone_date,p.photo_key,d.name as department_name,l.name as location_name
+    const result = await pool.query(`select p.id,p.name,p.status,p.budget_ugx,p.forecast_revenue_ugx,p.main_risk,p.next_milestone,p.milestone_date,p.photo_key,d.name as department_name,l.name as location_name,coalesce(spent.actual_spend_ugx,0) as actual_spend_ugx
       from projects p left join departments d on d.id=p.department_id and d.organisation_id=p.organisation_id
       left join locations l on l.id=p.location_id and l.organisation_id=p.organisation_id
+      left join (select project_id,organisation_id,sum(amount_ugx) as actual_spend_ugx from transactions where direction='out' and deleted_at is null group by project_id,organisation_id) spent on spent.project_id=p.id and spent.organisation_id=p.organisation_id
       where p.organisation_id=$1 and p.deleted_at is null order by p.created_at desc`, [user.organisation_id]);
     const projects = await Promise.all(result.rows.map(async project => ({ ...project, photo_url: project.photo_key && s3 && process.env.AWS_BUCKET ? await getSignedUrl(s3, new GetObjectCommand({ Bucket: process.env.AWS_BUCKET, Key: project.photo_key }), { expiresIn: 600 }) : null })));
     return json(res, 200, projects);
@@ -314,7 +324,8 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && url.pathname === '/api/purchases') {
     requirePermission(user,'purchase.view');
-    const result=await pool.query('select id,txn_date,name,category,quantity,cost_ugx,expected_benefit,proof from purchases where organisation_id=$1 and deleted_at is null order by txn_date desc,created_at desc limit 500',[user.organisation_id]);
+    const result=await pool.query(`select p.id,p.txn_date,p.name,p.category,p.quantity,p.cost_ugx,p.expected_benefit,p.proof,p.supplier_id,s.name as supplier_name,p.project_id
+      from purchases p left join suppliers s on s.id=p.supplier_id and s.organisation_id=p.organisation_id where p.organisation_id=$1 and p.deleted_at is null order by p.txn_date desc,p.created_at desc limit 500`,[user.organisation_id]);
     return json(res,200,result.rows);
   }
   if (req.method === 'POST' && url.pathname === '/api/purchases') {
@@ -323,15 +334,29 @@ async function route(req, res) {
     const cost=Number(data.costUgx); if(!Number.isSafeInteger(cost)||cost<0) throw Object.assign(new Error('Cost must be a non-negative whole UGX amount'),{status:400});
     const txnDate=validDate(data.date,'Date'); const quantity=data.quantity?requiredString(data.quantity,'Quantity',120):null;
     const benefit=data.expectedBenefit?requiredString(data.expectedBenefit,'Expected benefit',1000):null; const proof=data.proof?requiredString(data.proof,'Proof',1000):null;
+    const supplierId=data.supplierId||null; const stockItemId=data.stockItemId||null; const projectId=data.projectId||null;
+    const quantityUnits=data.quantityUnits==null||data.quantityUnits===''?null:Number(data.quantityUnits);
+    if(quantityUnits!==null&&(!Number.isFinite(quantityUnits)||quantityUnits<=0)) throw Object.assign(new Error('Stock quantity must be greater than zero'),{status:400});
+    if(stockItemId&&!quantityUnits) throw Object.assign(new Error('Enter the received stock quantity'),{status:400});
     return withAudit(req,res,{action:'create',type:'purchase'},async client=>{
-      const result=await client.query(`insert into purchases (organisation_id,txn_date,name,category,quantity,cost_ugx,expected_benefit,proof,created_by)
-        values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id,txn_date,name,category,quantity,cost_ugx,expected_benefit,proof`,[user.organisation_id,txnDate,name,category,quantity,cost,benefit,proof,user.id]);
+      const result=await client.query(`insert into purchases (organisation_id,txn_date,name,category,quantity,cost_ugx,expected_benefit,proof,created_by,supplier_id,stock_item_id,quantity_units,project_id)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id,txn_date,name,category,quantity,cost_ugx,expected_benefit,proof,supplier_id,stock_item_id,quantity_units,project_id`,[user.organisation_id,txnDate,name,category,quantity,cost,benefit,proof,user.id,supplierId,stockItemId,quantityUnits,projectId]);
+      if(stockItemId){
+        const item=await client.query('select id from stock_items where id=$1 and organisation_id=$2',[stockItemId,user.organisation_id]);
+        if(!item.rowCount) throw Object.assign(new Error('Stock item not found'),{status:400});
+        await client.query(`insert into stock_movements(organisation_id,item_id,movement_date,movement_type,quantity,unit_cost_ugx,reference,created_by) values($1,$2,$3,'receipt',$4,$5,$6,$7)`,[user.organisation_id,stockItemId,txnDate,quantityUnits,quantityUnits?Math.round(cost/quantityUnits):0,`Purchase: ${name}`,user.id]);
+      }
+      if(cost>0) await client.query(`insert into transactions(organisation_id,txn_date,direction,description,original_minor,currency,exchange_rate,amount_ugx,project_id,created_by) values($1,$2,'out',$3,$4,'UGX',1,$4,$5,$6)`,[user.organisation_id,txnDate,`Purchase: ${name}`,cost,projectId,user.id]);
       return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
     });
   }
   if (req.method === 'GET' && url.pathname === '/api/crop-cycles') {
     requirePermission(user,'crop.view');
-    const result=await pool.query('select id,name,area,cost_ugx,harvest_quantity,revenue_ugx,started_on,(revenue_ugx-cost_ugx) as profit_ugx from crop_cycles where organisation_id=$1 and deleted_at is null order by started_on desc,created_at desc limit 500',[user.organisation_id]);
+    const result=await pool.query(`select c.id,c.name,c.area,c.cost_ugx,c.harvest_quantity,c.started_on,c.location_id,c.variety,c.status,l.name as location_name,
+      coalesce((select sum(s.total_ugx) from sales s where s.crop_cycle_id=c.id),c.revenue_ugx) as revenue_ugx,
+      (coalesce((select sum(s.total_ugx) from sales s where s.crop_cycle_id=c.id),c.revenue_ugx)-c.cost_ugx) as profit_ugx
+      from crop_cycles c left join locations l on l.id=c.location_id and l.organisation_id=c.organisation_id
+      where c.organisation_id=$1 and c.deleted_at is null order by c.started_on desc,c.created_at desc limit 500`,[user.organisation_id]);
     return json(res,200,result.rows);
   }
   if (req.method === 'POST' && url.pathname === '/api/crop-cycles') {
@@ -339,12 +364,111 @@ async function route(req, res) {
     const data=await body(req); const name=requiredString(data.name,'Crop or block name'); const cost=Number(data.costUgx||0); const revenue=Number(data.revenueUgx||0);
     if(!Number.isSafeInteger(cost)||cost<0||!Number.isSafeInteger(revenue)||revenue<0) throw Object.assign(new Error('Cost and revenue must be non-negative whole UGX amounts'),{status:400});
     const area=data.area?requiredString(data.area,'Area',120):null; const harvest=data.harvestQuantity?requiredString(data.harvestQuantity,'Harvest quantity',120):null; const startedOn=validDate(data.startedOn||dateToday(),'Start date');
+    const locationId=data.locationId||null; const variety=data.variety?requiredString(data.variety,'Variety',150):null;
+    const status=data.status||'Growing'; if(!['Planned','Growing','Harvested','Closed'].includes(status)) throw Object.assign(new Error('Invalid crop status'),{status:400});
     return withAudit(req,res,{action:'create',type:'crop_cycle'},async client=>{
-      const result=await client.query(`insert into crop_cycles (organisation_id,name,area,cost_ugx,harvest_quantity,revenue_ugx,started_on,created_by)
-        values ($1,$2,$3,$4,$5,$6,$7,$8) returning id,name,area,cost_ugx,harvest_quantity,revenue_ugx,started_on,(revenue_ugx-cost_ugx) as profit_ugx`,
-        [user.organisation_id,name,area,cost,harvest,revenue,startedOn,user.id]);
+      const result=await client.query(`insert into crop_cycles (organisation_id,name,area,cost_ugx,harvest_quantity,revenue_ugx,started_on,created_by,location_id,variety,status)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id,name,area,cost_ugx,harvest_quantity,revenue_ugx,started_on,location_id,variety,status,(revenue_ugx-cost_ugx) as profit_ugx`,
+        [user.organisation_id,name,area,cost,harvest,revenue,startedOn,user.id,locationId,variety,status]);
       return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
     });
+  }
+  if (req.method === 'GET' && ['/api/suppliers','/api/customers'].includes(url.pathname)) {
+    const supplier=url.pathname==='/api/suppliers'; requirePermission(user,supplier?'supplier.view':'customer.view');
+    const table=supplier?'suppliers':'customers';
+    const result=await pool.query(`select id,name,contact_name,phone,email,address from ${table} where organisation_id=$1 order by name`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && ['/api/suppliers','/api/customers'].includes(url.pathname)) {
+    const supplier=url.pathname==='/api/suppliers'; requirePermission(user,supplier?'supplier.create':'customer.create');
+    const data=await body(req); const name=requiredString(data.name,'Name');
+    const contact=data.contactName?requiredString(data.contactName,'Contact name',200):null;
+    const phone=data.phone?requiredString(data.phone,'Phone',50):null; const email=data.email?requiredString(data.email,'Email',320).toLowerCase():null;
+    const address=data.address?requiredString(data.address,'Address',500):null; const table=supplier?'suppliers':'customers';
+    return withAudit(req,res,{action:'create',type:supplier?'supplier':'customer'},async client=>{
+      const result=await client.query(`insert into ${table}(organisation_id,name,contact_name,phone,email,address,created_by) values($1,$2,$3,$4,$5,$6,$7) returning id,name,contact_name,phone,email,address`,[user.organisation_id,name,contact,phone,email,address,user.id]);
+      return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
+    });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/stock') {
+    requirePermission(user,'stock.view');
+    const result=await pool.query(`select i.id,i.name,i.category,i.unit,i.reorder_level,i.location_id,l.name as location_name,
+      coalesce(sum(m.quantity),0) as quantity,coalesce(sum(m.quantity*m.unit_cost_ugx),0) as stock_value
+      from stock_items i left join stock_movements m on m.item_id=i.id and m.organisation_id=i.organisation_id
+      left join locations l on l.id=i.location_id and l.organisation_id=i.organisation_id
+      where i.organisation_id=$1 group by i.id,l.name order by i.name`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/stock') {
+    requirePermission(user,'stock.create'); const data=await body(req); const name=requiredString(data.name,'Item name');
+    const category=requiredString(data.category||'Other','Category',80); const unit=requiredString(data.unit||'unit','Unit',30);
+    const reorder=Number(data.reorderLevel||0); if(!Number.isFinite(reorder)||reorder<0) throw Object.assign(new Error('Reorder level must be zero or higher'),{status:400});
+    const locationId=data.locationId||null; const opening=Number(data.openingQuantity||0);
+    if(!Number.isFinite(opening)||opening<0) throw Object.assign(new Error('Opening quantity must be zero or higher'),{status:400});
+    return withAudit(req,res,{action:'create',type:'stock_item'},async client=>{
+      const result=await client.query(`insert into stock_items(organisation_id,name,category,unit,reorder_level,location_id,created_by) values($1,$2,$3,$4,$5,$6,$7) returning id,name,category,unit,reorder_level,location_id`,[user.organisation_id,name,category,unit,reorder,locationId,user.id]);
+      if(opening>0) await client.query(`insert into stock_movements(organisation_id,item_id,movement_date,movement_type,quantity,reference,created_by) values($1,$2,$3,'adjustment',$4,'Opening balance',$5)`,[user.organisation_id,result.rows[0].id,dateToday(),opening,user.id]);
+      return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
+    });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/stock/movements') {
+    requirePermission(user,'stock.create'); const data=await body(req); const itemId=requiredString(data.itemId,'Stock item',50);
+    const type=requiredString(data.type,'Movement type',20); const qty=Number(data.quantity); const cost=Number(data.unitCostUgx||0);
+    if(!['issue','adjustment'].includes(type)||!Number.isFinite(qty)||qty===0||!Number.isSafeInteger(cost)||cost<0) throw Object.assign(new Error('Enter a valid stock adjustment or issue'),{status:400});
+    const quantity=type==='issue'?-Math.abs(qty):qty; const movementDate=validDate(data.date||dateToday(),'Date');
+    return withAudit(req,res,{action:'create',type:'stock_movement'},async client=>{
+      const item=await client.query('select id from stock_items where id=$1 and organisation_id=$2 for update',[itemId,user.organisation_id]);
+      if(!item.rowCount) throw Object.assign(new Error('Stock item not found'),{status:404});
+      const balance=await client.query('select coalesce(sum(quantity),0) as quantity from stock_movements where organisation_id=$1 and item_id=$2',[user.organisation_id,itemId]);
+      if(type==='issue'&&Number(balance.rows[0].quantity)<Math.abs(quantity)) throw Object.assign(new Error('Issue quantity exceeds stock on hand'),{status:400});
+      const result=await client.query(`insert into stock_movements(organisation_id,item_id,movement_date,movement_type,quantity,unit_cost_ugx,reference,created_by) values($1,$2,$3,$4,$5,$6,$7,$8) returning id,item_id,movement_date,movement_type,quantity,reference`,[user.organisation_id,itemId,movementDate,type,quantity,cost,data.reference?requiredString(data.reference,'Reason',250):null,user.id]);
+      return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
+    });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/sales') {
+    requirePermission(user,'sales.view');
+    const result=await pool.query(`select s.id,s.sale_date,s.produce,s.quantity,s.unit,s.unit_price_ugx,s.total_ugx,s.payment_method,s.notes,
+      s.customer_id,c.name as customer_name,s.crop_cycle_id,cc.name as crop_name
+      from sales s left join customers c on c.id=s.customer_id and c.organisation_id=s.organisation_id
+      left join crop_cycles cc on cc.id=s.crop_cycle_id and cc.organisation_id=s.organisation_id
+      where s.organisation_id=$1 order by s.sale_date desc,s.created_at desc limit 500`,[user.organisation_id]);
+    return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/sales') {
+    requirePermission(user,'sales.create'); const data=await body(req); const produce=requiredString(data.produce,'Produce',200);
+    const quantity=Number(data.quantity); const unit=requiredString(data.unit||'kg','Unit',30); const unitPrice=Number(data.unitPriceUgx);
+    const total=Math.round(quantity*unitPrice); if(!Number.isFinite(quantity)||quantity<=0||!Number.isSafeInteger(unitPrice)||unitPrice<0||!Number.isSafeInteger(total)) throw Object.assign(new Error('Enter a valid quantity and whole UGX unit price'),{status:400});
+    const saleDate=validDate(data.date||dateToday(),'Sale date'); const customerId=data.customerId||null; const cropId=data.cropCycleId||null; const itemId=data.stockItemId||null;
+    return withAudit(req,res,{action:'create',type:'sale'},async client=>{
+      if(itemId){const item=await client.query('select id from stock_items where id=$1 and organisation_id=$2 for update',[itemId,user.organisation_id]);if(!item.rowCount) throw Object.assign(new Error('Stock item not found'),{status:400});const stock=await client.query('select coalesce(sum(quantity),0) as quantity from stock_movements where organisation_id=$1 and item_id=$2',[user.organisation_id,itemId]);if(Number(stock.rows[0].quantity)<quantity) throw Object.assign(new Error('Sale quantity exceeds stock on hand'),{status:400});}
+      const result=await client.query(`insert into sales(organisation_id,sale_date,customer_id,crop_cycle_id,stock_item_id,produce,quantity,unit,unit_price_ugx,total_ugx,payment_method,notes,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id,sale_date,produce,quantity,unit,unit_price_ugx,total_ugx,customer_id,crop_cycle_id`,[user.organisation_id,saleDate,customerId,cropId,itemId,produce,quantity,unit,unitPrice,total,data.paymentMethod?requiredString(data.paymentMethod,'Payment method',50):null,data.notes?requiredString(data.notes,'Notes',500):null,user.id]);
+      if(itemId) await client.query(`insert into stock_movements(organisation_id,item_id,movement_date,movement_type,quantity,reference,created_by) values($1,$2,$3,'sale',$4,$5,$6)`,[user.organisation_id,itemId,saleDate,-quantity,`Sale ${result.rows[0].id}`,user.id]);
+      if(total>0) await client.query(`insert into transactions(organisation_id,txn_date,direction,description,original_minor,currency,exchange_rate,amount_ugx,created_by) values($1,$2,'in',$3,$4,'UGX',1,$4,$5)`,[user.organisation_id,saleDate,`Sale: ${produce}`,total,user.id]);
+      return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};
+    });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/attendance') {
+    requirePermission(user,'attendance.view'); const result=await pool.query(`select a.id,a.employee_id,e.full_name,a.attendance_date,a.status,a.notes from attendance a join employees e on e.id=a.employee_id and e.organisation_id=a.organisation_id where a.organisation_id=$1 order by a.attendance_date desc,e.full_name limit 1000`,[user.organisation_id]);return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/attendance') {
+    requirePermission(user,'attendance.create'); const data=await body(req); const employeeId=requiredString(data.employeeId,'Employee',50); const date=validDate(data.date||dateToday(),'Attendance date'); const status=requiredString(data.status,'Status',20);
+    if(!['Present','Absent','Leave','Half day'].includes(status)) throw Object.assign(new Error('Choose a valid attendance status'),{status:400});
+    return withAudit(req,res,{action:'record',type:'attendance'},async client=>{const result=await client.query(`insert into attendance(organisation_id,employee_id,attendance_date,status,notes,created_by) values($1,$2,$3,$4,$5,$6) on conflict(organisation_id,employee_id,attendance_date) do update set status=excluded.status,notes=excluded.notes returning id,employee_id,attendance_date,status,notes`,[user.organisation_id,employeeId,date,status,data.notes?requiredString(data.notes,'Notes',500):null,user.id]);return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};});
+  }
+  if (req.method === 'GET' && url.pathname === '/api/payroll') {
+    requirePermission(user,'payroll.view'); const result=await pool.query(`select p.id,p.employee_id,e.full_name,p.period_start,p.period_end,p.gross_ugx,p.paid_ugx,p.status,p.paid_on,p.notes from payroll p join employees e on e.id=p.employee_id and e.organisation_id=p.organisation_id where p.organisation_id=$1 order by p.period_start desc,e.full_name limit 500`,[user.organisation_id]);return json(res,200,result.rows);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/payroll') {
+    requirePermission(user,'payroll.create'); const data=await body(req); const employeeId=requiredString(data.employeeId,'Employee',50); const periodStart=validDate(data.periodStart,'Period start');const periodEnd=validDate(data.periodEnd,'Period end');const gross=Number(data.grossUgx);const paid=Number(data.paidUgx||0);
+    if(!Number.isSafeInteger(gross)||gross<0||!Number.isSafeInteger(paid)||paid<0||paid>gross||periodEnd<periodStart) throw Object.assign(new Error('Enter valid payroll period and amounts'),{status:400});
+    const status=paid===0?'Pending':paid===gross?'Paid':'Partially paid'; const paidOn=paid?validDate(data.paidOn||dateToday(),'Payment date'):null;
+    return withAudit(req,res,{action:'create',type:'payroll'},async client=>{const result=await client.query(`insert into payroll(organisation_id,employee_id,period_start,period_end,gross_ugx,paid_ugx,status,paid_on,notes,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id,employee_id,period_start,period_end,gross_ugx,paid_ugx,status,paid_on,notes`,[user.organisation_id,employeeId,periodStart,periodEnd,gross,paid,status,paidOn,data.notes?requiredString(data.notes,'Notes',500):null,user.id]);if(paid>0) await client.query(`insert into transactions(organisation_id,txn_date,direction,description,original_minor,currency,exchange_rate,amount_ugx,created_by) values($1,$2,'out',$3,$4,'UGX',1,$4,$5)`,[user.organisation_id,paidOn,`Salary: ${result.rows[0].employee_id} (${periodStart})`,paid,user.id]);return {id:result.rows[0].id,response:result.rows[0],auditValue:result.rows[0]};});
+  }
+  const payrollPaymentMatch=url.pathname.match(/^\/api\/payroll\/([0-9a-f-]{36})\/payments$/i);
+  if(req.method==='POST'&&payrollPaymentMatch){
+    requirePermission(user,'payroll.create');const data=await body(req);const amount=Number(data.amountUgx);const paidOn=validDate(data.date||dateToday(),'Payment date');
+    if(!Number.isSafeInteger(amount)||amount<=0)throw Object.assign(new Error('Payment must be a positive whole UGX amount'),{status:400});
+    return withAudit(req,res,{action:'payment',type:'payroll'},async client=>{const existing=await client.query(`select p.*,e.full_name from payroll p join employees e on e.id=p.employee_id and e.organisation_id=p.organisation_id where p.id=$1 and p.organisation_id=$2 for update of p`,[payrollPaymentMatch[1],user.organisation_id]);if(!existing.rowCount)throw Object.assign(new Error('Payroll record not found'),{status:404});const p=existing.rows[0];const next=Number(p.paid_ugx)+amount;if(next>Number(p.gross_ugx))throw Object.assign(new Error('Payment exceeds the outstanding salary balance'),{status:400});const status=next===Number(p.gross_ugx)?'Paid':'Partially paid';const result=await client.query(`update payroll set paid_ugx=$3,status=$4,paid_on=$5 where id=$1 and organisation_id=$2 returning id,employee_id,period_start,period_end,gross_ugx,paid_ugx,status,paid_on,notes`,[p.id,user.organisation_id,next,status,paidOn]);await client.query(`insert into transactions(organisation_id,txn_date,direction,description,original_minor,currency,exchange_rate,amount_ugx,created_by) values($1,$2,'out',$3,$4,'UGX',1,$4,$5)`,[user.organisation_id,paidOn,`Salary: ${p.full_name} (${String(p.period_start).slice(0,10)})`,amount,user.id]);return {id:p.id,response:result.rows[0],oldValue:p,auditValue:result.rows[0]};});
   }
   if (req.method === 'GET' && url.pathname === '/api/decisions') {
     requirePermission(user,'decision.view');
@@ -385,7 +509,7 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && url.pathname === '/api/people') {
     requirePermission(user,'people.view');
-    const result=await pool.query(`select p.id,p.full_name,p.job_title,p.email,p.phone,p.start_date,p.status,p.notes,p.department_id,d.name as department_name
+    const result=await pool.query(`select p.id,p.full_name,p.job_title,p.email,p.phone,p.start_date,p.status,p.notes,p.department_id,p.salary_ugx,d.name as department_name
       from employees p left join departments d on d.id=p.department_id and d.organisation_id=p.organisation_id
       where p.organisation_id=$1 order by p.status='Inactive',p.full_name`,[user.organisation_id]);
     return json(res,200,result.rows);
@@ -400,12 +524,13 @@ async function route(req, res) {
     const startDate=data.startDate?validDate(data.startDate,'Start date'):null;
     const status=data.status||'Active';
     if(!['Active','On leave','Inactive'].includes(status)) throw Object.assign(new Error('Choose a valid employment status'),{status:400});
+    const salary=Number(data.salaryUgx||0); if(!Number.isSafeInteger(salary)||salary<0) throw Object.assign(new Error('Salary must be a non-negative whole UGX amount'),{status:400});
     const departmentId=data.departmentId||null;
     const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
     return withAudit(req,res,{action:'create',type:'employee'},async client=>{
-      const result=await client.query(`insert into employees (organisation_id,full_name,job_title,email,phone,start_date,status,department_id,notes,created_by)
-        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id,full_name,job_title,email,phone,start_date,status,department_id,notes`,
-        [user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes,user.id]);
+      const result=await client.query(`insert into employees (organisation_id,full_name,job_title,email,phone,start_date,status,department_id,notes,created_by,salary_ugx)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id,full_name,job_title,email,phone,start_date,status,department_id,notes,salary_ugx`,
+        [user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes,user.id,salary]);
       const row=result.rows[0];
       if(row.department_id){const department=await client.query('select name from departments where id=$1 and organisation_id=$2',[row.department_id,user.organisation_id]);row.department_name=department.rows[0]?.name||null;}
       return {id:row.id,response:row,auditValue:row};
@@ -422,13 +547,14 @@ async function route(req, res) {
     const startDate=data.startDate?validDate(data.startDate,'Start date'):null;
     const status=data.status||'Active';
     if(!['Active','On leave','Inactive'].includes(status)) throw Object.assign(new Error('Choose a valid employment status'),{status:400});
+    const salary=Number(data.salaryUgx||0); if(!Number.isSafeInteger(salary)||salary<0) throw Object.assign(new Error('Salary must be a non-negative whole UGX amount'),{status:400});
     const departmentId=data.departmentId||null; const notes=data.notes?requiredString(data.notes,'Notes',1000):null;
     return withAudit(req,res,{action:'update',type:'employee'},async client=>{
       const existing=await client.query('select * from employees where id=$1 and organisation_id=$2 for update',[personIdMatch[1],user.organisation_id]);
       if(!existing.rowCount) throw Object.assign(new Error('Person not found'),{status:404});
-      const result=await client.query(`update employees set full_name=$3,job_title=$4,email=$5,phone=$6,start_date=$7,status=$8,department_id=$9,notes=$10
-        where id=$1 and organisation_id=$2 returning id,full_name,job_title,email,phone,start_date,status,department_id,notes`,
-        [personIdMatch[1],user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes]);
+      const result=await client.query(`update employees set full_name=$3,job_title=$4,email=$5,phone=$6,start_date=$7,status=$8,department_id=$9,notes=$10,salary_ugx=$11
+        where id=$1 and organisation_id=$2 returning id,full_name,job_title,email,phone,start_date,status,department_id,notes,salary_ugx`,
+        [personIdMatch[1],user.organisation_id,name,title,email,phone,startDate,status,departmentId,notes,salary]);
       const row=result.rows[0];
       if(row.department_id){const department=await client.query('select name from departments where id=$1 and organisation_id=$2',[row.department_id,user.organisation_id]);row.department_name=department.rows[0]?.name||null;}
       return {id:row.id,response:row,oldValue:existing.rows[0],auditValue:row};
