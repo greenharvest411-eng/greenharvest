@@ -11,7 +11,10 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 const scrypt = promisify(scryptCallback);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: Number(process.env.PG_POOL_SIZE || 5),
+  // Vercel creates multiple serverless instances. Keep each instance to one
+  // session-pooler connection so parallel cold starts cannot exhaust Supabase's
+  // small session-mode pool (15 connections on the current project).
+  max: Number(process.env.PG_POOL_SIZE || 1),
   connectionTimeoutMillis: 65_000,
   idleTimeoutMillis: 30_000,
   ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: process.env.PGSSL !== 'require' },
